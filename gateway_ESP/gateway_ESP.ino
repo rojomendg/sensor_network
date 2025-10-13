@@ -58,6 +58,68 @@ static inline void LOG(const String& s) {
   Serial.println(s);
 }
 
+// ---------- Boot log ----------
+const char* BOOTLOG_PATH = "/boot_log.csv";
+
+static inline const char* resetReasonStr(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "POWERON";
+    case ESP_RST_EXT:       return "EXT";
+    case ESP_RST_SW:        return "SW";
+    case ESP_RST_PANIC:     return "PANIC";
+    case ESP_RST_INT_WDT:   return "INT_WDT";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT";
+    case ESP_RST_WDT:       return "WDT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "UNKNOWN";
+  }
+}
+
+static inline const char* wakeupCauseStr(esp_sleep_wakeup_cause_t c) {
+  switch (c) {
+    case ESP_SLEEP_WAKEUP_UNDEFINED: return "UNDEFINED";
+    case ESP_SLEEP_WAKEUP_ALL:       return "ALL";
+    case ESP_SLEEP_WAKEUP_EXT0:      return "EXT0";
+    case ESP_SLEEP_WAKEUP_EXT1:      return "EXT1";
+    case ESP_SLEEP_WAKEUP_TIMER:     return "TIMER";
+    case ESP_SLEEP_WAKEUP_TOUCHPAD:  return "TOUCHPAD";
+    case ESP_SLEEP_WAKEUP_ULP:       return "ULP";
+    case ESP_SLEEP_WAKEUP_GPIO:      return "GPIO";
+    case ESP_SLEEP_WAKEUP_UART:      return "UART";
+    default:                         return "UNKNOWN";
+  }
+}
+
+void ensureBootLogHeader() {
+  if (!SPIFFS.exists(BOOTLOG_PATH)) {
+    File f = SPIFFS.open(BOOTLOG_PATH, "w");
+    if (f) {
+      f.println("Timestamp,ResetReason,WakeupCause");
+      f.close();
+      LOG("BootLog: creado con cabecera.");
+    } else {
+      LOG("ERROR: no se pudo crear BootLog.");
+    }
+  }
+}
+
+bool appendBootLogEntry() {
+  File f = SPIFFS.open(BOOTLOG_PATH, "a");
+  if (!f) return false;
+  esp_reset_reason_t rr = esp_reset_reason();
+  esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
+  String line;
+  line.reserve(64);
+  line += nowTimestamp(); line += ",";
+  line += resetReasonStr(rr); line += ",";
+  line += wakeupCauseStr(wc);
+  f.println(line);
+  f.close();
+  return true;
+}
+
 // ---------- Utilidades ----------
 String nowTimestamp() {
   DateTime t = rtc.now();
@@ -241,24 +303,63 @@ uint64_t microsToNextWindow() {
 // ==================== Páginas web ====================
 void handleRoot() {
   String html;
-  html.reserve(3000);
+  html.reserve(4000);
   html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>Gateway ESP32</title>";
   html += "<style>body{font-family:system-ui;margin:2rem;max-width:800px}a.btn,button{padding:.6rem 1rem;border:1px solid #999;border-radius:.5rem;text-decoration:none;display:inline-block;margin-right:.5rem}code{background:#eee;padding:.1rem .3rem;border-radius:.3rem}</style>";
   html += "</head><body>";
   html += "<h1>Gateway ESP32</h1>";
-  html += "<p>Modo ahorro: <b>"; html += (g_sleepMode ? "ON" : "OFF"); html += "</b></p>";
-  html += "<p>Intervalo: <code>"; html += String(g_interval_s); html += " s</code> — Ventana: <code>"; html += String(g_window_s); html += " s</code> — Alinear: <code>"; html += (g_align?"true":"false"); html += "</code></p>";
-  html += "<p>AP: <b>"; html += AP_SSID; html += "</b> — IP: <code>"; html += WiFi.softAPIP().toString(); html += "</code></p>";
-  html += "<p>Hora (RTC): <code>"; html += nowTimestamp(); html += "</code></p>";
-  html += "<p>Archivo: <code>"; html += LOG_PATH; html += "</code> ("; html += humanSize(fileSize(LOG_PATH)); html += ")</p>";
+
+  html += "<p>Modo ahorro: <b>";
+  html += (g_sleepMode ? "ON" : "OFF");
+  html += "</b></p>";
+
+  html += "<p>Intervalo: <code>";
+  html += String(g_interval_s);
+  html += " s</code> — Ventana: <code>";
+  html += String(g_window_s);
+  html += " s</code> — Alinear: <code>";
+  html += (g_align ? "true" : "false");
+  html += "</code></p>";
+
+  html += "<p>AP: <b>";
+  html += AP_SSID;
+  html += "</b> — IP: <code>";
+  html += WiFi.softAPIP().toString();
+  html += "</code></p>";
+
+  html += "<p>Hora (RTC): <code>";
+  html += nowTimestamp();
+  html += "</code></p>";
+
+  // --- Sección archivo de datos (igual que antes, solo agrupado) ---
+  html += "<h2>Datos de sensores</h2>";
+  html += "<p>Archivo: <code>";
+  html += LOG_PATH;
+  html += "</code> (";
+  html += humanSize(fileSize(LOG_PATH));
+  html += ")</p>";
   html += "<p><a class='btn' href='/download'>Descargar CSV</a> ";
-  html += "<form style='display:inline' method='POST' action='/erase' onsubmit='return confirm(\"¿Borrar el archivo?\")'><button type='submit'>Borrar archivo</button></form> ";
-  html += "<a class='btn' href='/time'>Ajustar fecha/hora RTC</a> ";
+  html += "<form style='display:inline' method='POST' action='/erase' onsubmit='return confirm(\"¿Borrar el archivo de datos?\")'><button type='submit'>Borrar archivo</button></form></p>";
+
+  // --- NUEVO: Sección Boot Log ---
+  html += "<h2>Registro de arranques</h2>";
+  html += "<p>Archivo: <code>";
+  html += BOOTLOG_PATH;
+  html += "</code> (";
+  html += humanSize(fileSize(BOOTLOG_PATH));
+  html += ")</p>";
+  html += "<p><a class='btn' href='/bootlog'>Descargar boot log</a> ";
+  html += "<form style='display:inline' method='POST' action='/bootlog_erase' onsubmit='return confirm(\"¿Borrar el boot log?\")'><button type='submit'>Borrar boot log</button></form></p>";
+
+  // --- Acciones generales ---
+  html += "<p><a class='btn' href='/time'>Ajustar fecha/hora RTC</a> ";
   html += "<a class='btn' href='/config'>Config ahorro</a></p>";
+
   html += "</body></html>";
   server.send(200, "text/html; charset=utf-8", html);
 }
+
 
 void handleDownload() {
   if (!SPIFFS.exists(LOG_PATH)) { server.send(404, "text/plain", "No existe"); return; }
@@ -282,6 +383,32 @@ void handleErase() {
     LOG("CSV no existía al borrar.");
   }
   ensureCsvHeader();
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void handleBootDownload() {
+  if (!SPIFFS.exists(BOOTLOG_PATH)) { server.send(404, "text/plain", "No existe"); return; }
+  File f = SPIFFS.open(BOOTLOG_PATH, "r");
+  if (!f) { server.send(500, "text/plain", "Error abriendo archivo"); return; }
+  server.sendHeader("Content-Type", "text/csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=\"boot_log.csv\"");
+  server.streamFile(f, "text/csv");
+  f.close();
+}
+
+void handleBootErase() {
+  LOG("HTTP POST /bootlog_erase");
+  if (SPIFFS.exists(BOOTLOG_PATH)) {
+    if (SPIFFS.remove(BOOTLOG_PATH)) {
+      LOG("BootLog borrado.");
+    } else {
+      LOG("ERROR: no se pudo borrar BootLog.");
+    }
+  } else {
+    LOG("BootLog no existía al borrar.");
+  }
+  ensureBootLogHeader();
   server.sendHeader("Location", "/");
   server.send(303);
 }
@@ -429,6 +556,17 @@ void setup() {
     LOG("RTC OK. Hora actual: " + nowTimestamp());
   }
 
+  // Boot log
+  ensureBootLogHeader();
+  if (appendBootLogEntry()) {
+    LOG(String("BootLog OK: ") +
+        resetReasonStr(esp_reset_reason()) + " / " +
+        wakeupCauseStr(esp_sleep_get_wakeup_cause()));
+  } else {
+    LOG("ERROR: appendBootLogEntry() falló.");
+  }
+
+
   // Si NO estamos en modo ahorro -> AP ON y servidor web
   if (!g_sleepMode) {
     startAP();
@@ -439,6 +577,9 @@ void setup() {
     server.on("/time",  HTTP_POST, handleTimeSet);
     server.on("/config",HTTP_GET, handleConfigGet);
     server.on("/config",HTTP_POST, handleConfigPost);
+    server.on("/bootlog",       HTTP_GET,  handleBootDownload);
+    server.on("/bootlog_erase", HTTP_POST, handleBootErase);
+
     server.begin();
 
     // RF24 Mesh activo continuo (como antes)
