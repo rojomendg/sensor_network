@@ -12,7 +12,7 @@
 #define MOISTURE_SOIL_SENSOR_PIN A0
 
 // --- NUEVO: pin que controla el TIP42C (alto-lado de VCC para DHT22 + YL69)
-// #define SENS_PWR 7   // LOW = ON, HIGH = OFF (con pull-up en la base del TIP42C)
+#define SENS_PWR 7   // LOW = ON, HIGH = OFF (con pull-up en la base del TIP42C)
 
 // Calibración humedad suelo
 #define DRY_SOIL 785
@@ -37,7 +37,7 @@ const int alarmPin = 3;
 const int outputPin = 4;
 volatile bool alarmFlag = false;
 
-int intervalMinutes = 15;
+int intervalMinutes = 1;
 bool confirmationReceived = false;
 
 struct __attribute__((packed)) SensorData {
@@ -82,8 +82,8 @@ void setup() {
   digitalWrite(outputPin, LOW);
 
   // --- NUEVO: controla TIP42C (arranca APAGADO por defecto)
-  // pinMode(SENS_PWR, OUTPUT);
-  // digitalWrite(SENS_PWR, HIGH); // HIGH = OFF (pull-up en base mantiene apagado)
+  pinMode(SENS_PWR, OUTPUT);
+  digitalWrite(SENS_PWR, HIGH); // HIGH = OFF (pull-up en base mantiene apagado)
 
   // RTC
   if (!rtc.begin()) {
@@ -156,7 +156,7 @@ void loop() {
     delay(5);
 
     // --- ENCENDER sensores con TIP42C ---
-    // digitalWrite(SENS_PWR, LOW);   // LOW = ON (base baja en PNP)
+    digitalWrite(SENS_PWR, LOW);   // LOW = ON (base baja en PNP)
     delay(1000);                   // DHT11/22 necesita ~1 s
     dht.begin();                   // init tras energizar
 
@@ -189,8 +189,8 @@ void loop() {
     }
 
     // --- APAGAR sensores ---
-    // pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT); // alta impedancia antes de cortar
-    // digitalWrite(SENS_PWR, HIGH);             // HIGH = OFF
+    pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT); // alta impedancia antes de cortar
+    digitalWrite(SENS_PWR, HIGH);             // HIGH = OFF
 
     configureAlarm(intervalMinutes);
   }
