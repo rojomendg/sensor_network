@@ -120,6 +120,49 @@ bool appendBootLogEntry() {
   return true;
 }
 
+// ---------- Node log ----------
+const char* NODELOG_PATH = "/node_log.csv";
+
+// Mapa de nodos vistos (IDs 0..255) persistente entre deep-sleep
+RTC_DATA_ATTR uint8_t g_seen_bitmap[32] = {0}; // 32*8 = 256 bits
+
+inline bool nodeSeen(uint8_t id) {
+  return (g_seen_bitmap[id >> 3] >> (id & 7)) & 0x01;
+}
+inline void nodeMarkSeen(uint8_t id) {
+  g_seen_bitmap[id >> 3] |= (1 << (id & 7));
+}
+
+void ensureNodeLogHeader() {
+  if (!SPIFFS.exists(NODELOG_PATH)) {
+    File f = SPIFFS.open(NODELOG_PATH, "w");
+    if (f) {
+      f.println("Timestamp,Event,NodeID,MeshAddrOct");
+      f.close();
+      LOG("NodeLog: creado con cabecera.");
+    } else {
+      LOG("ERROR: no se pudo crear NodeLog.");
+    }
+  }
+}
+
+bool appendNodeEvent(const char* eventName, uint8_t nodeId, int addr /* -1 si no hay */) {
+  File f = SPIFFS.open(NODELOG_PATH, "a");
+  if (!f) return false;
+  String line; line.reserve(64);
+  line += nowTimestamp(); line += ",";
+  line += eventName;      line += ",";
+  line += String(nodeId); line += ",";
+  if (addr >= 0) {
+    line += "0"; line += String((uint16_t)addr, OCT);
+  } else {
+    line += "-";
+  }
+  f.println(line);
+  f.close();
+  return true;
+}
+
 // ---------- Utilidades ----------
 String nowTimestamp() {
   DateTime t = rtc.now();
@@ -263,6 +306,13 @@ void runReceiveWindow(uint32_t window_s) {
             if (mesh.addrList[i].nodeID==reqID){addr=mesh.addrList[i].address; found=true; break;}
           }
           if (found) {
+            // ---- NUEVO: logging de eventos de nodo ----
+            appendNodeEvent("TIME_REQ", (uint8_t)reqID, addr);
+            if (!nodeSeen((uint8_t)reqID)) {
+              nodeMarkSeen((uint8_t)reqID);
+              appendNodeEvent("JOIN", (uint8_t)reqID, addr);
+            }
+            
             DateTime now = rtc.now();
             TimeData td{(uint16_t)now.year(), (uint8_t)now.month(), (uint8_t)now.day(),
                         (uint8_t)now.hour(), (uint8_t)now.minute(), (uint8_t)now.second()};
@@ -352,6 +402,16 @@ void handleRoot() {
   html += "<p><a class='btn' href='/bootlog'>Descargar boot log</a> ";
   html += "<form style='display:inline' method='POST' action='/bootlog_erase' onsubmit='return confirm(\"¿Borrar el boot log?\")'><button type='submit'>Borrar boot log</button></form></p>";
 
+  // --- NUEVO: Sección Node Log ---
+  html += "<h2>Registro de nodos</h2>";
+  html += "<p>Archivo: <code>";
+  html += NODELOG_PATH;
+  html += "</code> (";
+  html += humanSize(fileSize(NODELOG_PATH));
+  html += ")</p>";
+  html += "<p><a class='btn' href='/nodelog'>Descargar node log</a> ";
+  html += "<form style='display:inline' method='POST' action='/nodelog_erase' onsubmit='return confirm(\"¿Borrar el node log?\")'><button type='submit'>Borrar node log</button></form></p>";
+
   // --- Acciones generales ---
   html += "<p><a class='btn' href='/time'>Ajustar fecha/hora RTC</a> ";
   html += "<a class='btn' href='/config'>Config ahorro</a></p>";
@@ -409,6 +469,32 @@ void handleBootErase() {
     LOG("BootLog no existía al borrar.");
   }
   ensureBootLogHeader();
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void handleNodeLogDownload() {
+  if (!SPIFFS.exists(NODELOG_PATH)) { server.send(404, "text/plain", "No existe"); return; }
+  File f = SPIFFS.open(NODELOG_PATH, "r");
+  if (!f) { server.send(500, "text/plain", "Error abriendo archivo"); return; }
+  server.sendHeader("Content-Type", "text/csv");
+  server.sendHeader("Content-Disposition", "attachment; filename=\"node_log.csv\"");
+  server.streamFile(f, "text/csv");
+  f.close();
+}
+
+void handleNodeLogErase() {
+  LOG("HTTP POST /nodelog_erase");
+  if (SPIFFS.exists(NODELOG_PATH)) {
+    if (SPIFFS.remove(NODELOG_PATH)) {
+      LOG("NodeLog borrado.");
+    } else {
+      LOG("ERROR: no se pudo borrar NodeLog.");
+    }
+  } else {
+    LOG("NodeLog no existía al borrar.");
+  }
+  ensureNodeLogHeader();
   server.sendHeader("Location", "/");
   server.send(303);
 }
@@ -558,6 +644,8 @@ void setup() {
 
   // Boot log
   ensureBootLogHeader();
+  ensureNodeLogHeader();
+
   if (appendBootLogEntry()) {
     LOG(String("BootLog OK: ") +
         resetReasonStr(esp_reset_reason()) + " / " +
@@ -579,6 +667,9 @@ void setup() {
     server.on("/config",HTTP_POST, handleConfigPost);
     server.on("/bootlog",       HTTP_GET,  handleBootDownload);
     server.on("/bootlog_erase", HTTP_POST, handleBootErase);
+    server.on("/nodelog",        HTTP_GET,  handleNodeLogDownload);
+    server.on("/nodelog_erase",  HTTP_POST, handleNodeLogErase);
+
 
     server.begin();
 
@@ -648,6 +739,14 @@ void loop() {
           }
         }
         if (found) {
+
+          // ---- NUEVO: logging de eventos de nodo ----
+          appendNodeEvent("TIME_REQ", (uint8_t)reqID, addr);
+          if (!nodeSeen((uint8_t)reqID)) {
+            nodeMarkSeen((uint8_t)reqID);
+            appendNodeEvent("JOIN", (uint8_t)reqID, addr);
+          }
+
           LOG(String("Addr para nodeID ") + reqID + " = 0" + String(addr, OCT));
           sendTimeToNode(addr);
           } else {
