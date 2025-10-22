@@ -15,8 +15,8 @@
 #define SENS_PWR 7   // LOW = ON, HIGH = OFF (con pull-up en la base del TIP42C)
 
 // Calibración humedad suelo
-#define DRY_SOIL 785
-#define WET_SOIL 350
+#define DRY_SOIL 900 //785
+#define WET_SOIL 200 //350
 
 const uint8_t MAX_RETRIES = 5;
 const unsigned long ACK_TIMEOUT = 1000;
@@ -157,12 +157,14 @@ void loop() {
 
     // --- ENCENDER sensores con TIP42C ---
     digitalWrite(SENS_PWR, LOW);   // LOW = ON (base baja en PNP)
-    delay(1000);                   // DHT11/22 necesita ~1 s
+    delay(1800);                   // DHT11/22 necesita ~1 s
     dht.begin();                   // init tras energizar
+    delay(50); //ADDED
 
-    // Leer y enviar
+    // Leer
     readSensor();
 
+    // Enviar
     bool sent = false;
     for (uint8_t i = 0; i < 3 && !sent; i++) {
       if (!sendSensorData()) {
@@ -189,9 +191,10 @@ void loop() {
     }
 
     // --- APAGAR sensores ---
+    pinMode(DHTPIN, INPUT);              // 
     pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT); // alta impedancia antes de cortar
     digitalWrite(SENS_PWR, HIGH);             // HIGH = OFF
-
+    delay(100); //Added
     configureAlarm(intervalMinutes);
   }
 
@@ -201,6 +204,7 @@ void loop() {
   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
 
   Serial.println("Woke up!");
+  delay(100); //ADDED
 }
 
 bool reqAndReceiveTime() {
@@ -273,6 +277,17 @@ void readSensor() {
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
+  auto invalid = [&](float h, float t){
+    return isnan(h) || isnan(t) || h < 0 || h > 100 || t < -40 || t > 80;
+  };
+
+  if (invalid(humidity, temperature)) {
+    // esperar la ventana mínima del DHT22
+    delay(2000);
+    humidity = dht.readHumidity();
+    temperature = dht.readTemperature();
+  }
+
   // Promedia 3 lecturas del suelo para estabilidad
   long acc = 0;
   for (int i = 0; i < 3; i++) {
@@ -280,19 +295,17 @@ void readSensor() {
     delay(10);
   }
   int soil_sensor = acc / 3;
-
   int soil_moisture = map(soil_sensor, DRY_SOIL, WET_SOIL, 0, 100);
   soil_moisture = constrain(soil_moisture, 0, 100);
 
-  if (isnan(humidity) || isnan(temperature)) {
-    Serial.println("Error when reading DHT sensor!");
+  if (invalid(humidity, temperature)) {
+    Serial.println("DHT invalid -> set zeros");
     data.humidity = 0;
     data.temperature = 0;
-    data.moistureLevel = soil_moisture;
-    return;
+  } else {
+    data.humidity = humidity;
+    data.temperature = temperature;
   }
-  data.humidity = humidity;
-  data.temperature = temperature;
   data.moistureLevel = soil_moisture;
 
   Serial.print("humidity: ");   Serial.print(data.humidity);
