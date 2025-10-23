@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
-#define MOISTURE_SOIL_SENSOR_PIN A0
+#define MOISTURE_SOIL_SENSOR_PIN_0 A0
+#define MOISTURE_SOIL_SENSOR_PIN_1 A1
 #define SENS_PWR 7   // Pin de control del TIP42C (alto-lado)
 
 // Calibración humedad suelo
@@ -21,17 +22,28 @@ void loop() {
   // Leer 3 veces para mayor estabilidad
   
 
-  int soil_sensor = analogRead(MOISTURE_SOIL_SENSOR_PIN);
+  int soil_sensor_0 = analogRead(MOISTURE_SOIL_SENSOR_PIN_0);
 
   // Convertir a porcentaje (0 = seco, 100 = húmedo)
-  int soil_moisture = map(soil_sensor, DRY_SOIL, WET_SOIL, 0, 100);
-  soil_moisture = constrain(soil_moisture, 0, 100);
+  int soil_moisture_0 = map(soil_sensor_0, DRY_SOIL, WET_SOIL, 0, 100);
+  soil_moisture_0 = constrain(soil_moisture_0, 0, 100);
+
+  int soil_sensor_1 = analogRead(MOISTURE_SOIL_SENSOR_PIN_1);
+
+  // Convertir a porcentaje (0 = seco, 100 = húmedo)
+  int soil_moisture_1 = map(soil_sensor_1, DRY_SOIL, WET_SOIL, 0, 100);
+  soil_moisture_1 = constrain(soil_moisture_1, 0, 100);
+
 
   // Mostrar resultados
-  Serial.print("Lectura raw: ");
-  Serial.print(soil_sensor);
-  Serial.print("  |  Humedad (%): ");
-  Serial.println(soil_moisture);
+  Serial.print("Raw 1: ");
+  Serial.print(soil_sensor_0);
+  Serial.print("  |  Humedad 1 (%): ");
+  Serial.print(soil_moisture_0);
+  Serial.print("  |  Raw 2: ");
+  Serial.print(soil_sensor_1);
+  Serial.print("  |  Humedad 2 (%): ");
+  Serial.println(soil_moisture_1);
 
-  delay(1000); // Actualiza cada segundo
+  delay(500); // Actualiza cada segundo
 }

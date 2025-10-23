@@ -15,8 +15,8 @@
 #define SENS_PWR 7   // LOW = ON, HIGH = OFF (con pull-up en la base del TIP42C)
 
 // Calibración humedad suelo
-#define DRY_SOIL 900 //785
-#define WET_SOIL 200 //350
+#define DRY_SOIL 1023//785
+#define WET_SOIL 0 //350
 
 const uint8_t MAX_RETRIES = 5;
 const unsigned long ACK_TIMEOUT = 1000;
@@ -73,6 +73,25 @@ struct payload_t {
 
 void onAlarm() { alarmFlag = true; }
 
+// =========================
+// PATCH: Join rápido con timeout (no bloqueante)
+// =========================
+bool tryMeshJoinWithin(uint32_t join_ms) {
+  uint32_t t0 = millis();
+
+  // Arranque del stack sin bucles bloqueantes
+  mesh.begin();
+
+  // Ventana corta de intentos de DHCP
+  while (millis() - t0 < join_ms) {
+    mesh.update();
+    if (mesh.checkConnection()) return true;
+    mesh.renewAddress();         // intento rápido; si no hay master, falla enseguida
+    delay(50);
+  }
+  return mesh.checkConnection();
+}
+
 void setup() {
   Serial.begin(9600);
   while (!Serial) { Serial.println("Stuck 1"); }
@@ -81,9 +100,9 @@ void setup() {
   pinMode(outputPin, OUTPUT);
   digitalWrite(outputPin, LOW);
 
-  // --- NUEVO: controla TIP42C (arranca APAGADO por defecto)
+  // TIP42C: arranca APAGADO por defecto
   pinMode(SENS_PWR, OUTPUT);
-  digitalWrite(SENS_PWR, HIGH); // HIGH = OFF (pull-up en base mantiene apagado)
+  digitalWrite(SENS_PWR, HIGH); // HIGH = OFF
 
   // RTC
   if (!rtc.begin()) {
@@ -111,20 +130,24 @@ void setup() {
   radio.enableDynamicPayloads();
   radio.setRetries(5, 15);
 
-  Serial.println(F("Connecting to the mesh..."));
-  if (!mesh.begin()) {
-    if (radio.isChipConnected()) {
-      do {
-        Serial.println(F("Could not connect to network.\nConnecting to the mesh..."));
-      } while (mesh.renewAddress() == MESH_DEFAULT_ADDRESS);
-    } else {
-      Serial.println(F("Radio hardware not responding."));
-      while (1) {}
-    }
+  // =========================
+  // PATCH: Join rápido en setup (sin bloqueo)
+  // =========================
+  Serial.println(F("Fast mesh join..."));
+  bool joined = tryMeshJoinWithin(1500);  // ~1.5s
+  if (!joined) {
+    Serial.println(F("No master -> sleep until next window"));
+    configureAlarm(intervalMinutes);
+    radio.powerDown();
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
   }
 
-  while (!reqAndReceiveTime()) {
-    Serial.println("Not able to synchronize time!");
+  // =========================
+  // PATCH: Sin bucle infinito de sincronización
+  // (intento único y continúas; el DS3231 mantiene buen tiempo)
+  // =========================
+  if (!reqAndReceiveTime()) {
+    Serial.println("Not able to synchronize time now");
   }
 
   Serial.println("Sensor Node Ready");
@@ -138,8 +161,7 @@ void setup() {
   Serial.println(now.second());
 
   configureAlarm(intervalMinutes);
-
-  // NOTA: dht.begin() se hace justo antes de leer, tras encender con TIP42C
+  // dht.begin() justo antes de leer tras energizar
 }
 
 void loop() {
@@ -155,46 +177,66 @@ void loop() {
     radio.powerUp();
     delay(5);
 
+    // =========================
+    // PATCH: Join corto dentro de la ventana
+    // =========================
+    if (!mesh.checkConnection()) {
+      if (!tryMeshJoinWithin(1200)) { // ~1.2s
+        Serial.println(F("No mesh this window -> sleep again"));
+        configureAlarm(intervalMinutes);
+        radio.powerDown();
+        LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+        return;
+      }
+    }
+
     // --- ENCENDER sensores con TIP42C ---
     digitalWrite(SENS_PWR, LOW);   // LOW = ON (base baja en PNP)
-    delay(1800);                   // DHT11/22 necesita ~1 s
+    delay(1800);                   // DHT22 ~1s; dejamos margen
     dht.begin();                   // init tras energizar
     delay(50); //ADDED
 
     // Leer
     readSensor();
 
-    // Enviar
+    // =========================
+    // PATCH: Retries limitados por ventana (deadline corto)
+    // =========================
     bool sent = false;
-    for (uint8_t i = 0; i < 3 && !sent; i++) {
-      if (!sendSensorData()) {
-        if (!mesh.checkConnection()) {
-          Serial.println("Renewing Address");
-          if (mesh.renewAddress() == MESH_DEFAULT_ADDRESS) {
-            mesh.begin(76, RF24_250KBPS);
-          }
-        } else {
-          Serial.println("Send fail, retrying...");
-        }
+    uint32_t deadline = millis() + 1800; // ~1.8s de ventana de envío
+    for (uint8_t i = 0; i < 2 && !sent && millis() < deadline; i++) {
+      if (!mesh.checkConnection()) {
+        mesh.renewAddress();
         delay(50);
-      } else {
-        sent = true;
-        Serial.print("Send OK at ms: ");
-        Serial.println(displayTimer);
+        if (!mesh.checkConnection()) continue;
       }
+      sent = sendSensorData();
+      if (!sent) delay(80);
     }
 
     if (!sent) {
-      if (!tryRecoverRadioMesh()) {
-        Serial.println(F("[RECOVER] still offline after recovery"));
-      }
+      Serial.println(F("No send this window -> sleep"));
+      // --- APAGAR sensores antes de dormir ---
+      pinMode(DHTPIN, INPUT);
+      pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT);
+      digitalWrite(SENS_PWR, HIGH); // OFF
+      delay(100);
+
+      configureAlarm(intervalMinutes);
+      radio.powerDown();
+      LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+      return;
     }
 
+    Serial.print("Send OK at ms: ");
+    Serial.println(displayTimer);
+
     // --- APAGAR sensores ---
-    pinMode(DHTPIN, INPUT);              // 
-    pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT); // alta impedancia antes de cortar
-    digitalWrite(SENS_PWR, HIGH);             // HIGH = OFF
-    delay(100); //Added
+    pinMode(DHTPIN, INPUT);
+    pinMode(MOISTURE_SOIL_SENSOR_PIN, INPUT);
+    digitalWrite(SENS_PWR, HIGH); // OFF
+    delay(100);
+
     configureAlarm(intervalMinutes);
   }
 
@@ -214,15 +256,18 @@ bool reqAndReceiveTime() {
   bool reqSent = false;
 
   Serial.print("Sending time update request");
+  // (deja el bucle de envío, pero no bloqueamos más allá del timeout de abajo)
   while (!reqSent) {
     reqSent = mesh.write(&req, 'R', sizeof(req));
     Serial.print(".");
     delay(200);
+    // PATCH: si no hay conexión, sal pronto
+    if (!mesh.checkConnection()) break;
   }
-  Serial.println("Request sent successfully!");
+  Serial.println("Request sent!");
 
   unsigned long startTime = millis();
-  while (millis() - startTime < 5000) {
+  while (millis() - startTime < 1500) { // PATCH: timeout corto (antes eran 5s)
     mesh.update();
     if (network.available()) {
       network.peek(h);
@@ -278,7 +323,7 @@ void readSensor() {
   float temperature = dht.readTemperature();
 
   auto invalid = [&](float h, float t){
-    return isnan(h) || isnan(t) || h < 0 || h > 100 || t < -40 || t > 80;
+    return isnan(h) || h < 0 || h > 100 || isnan(t) || t < -40 || t > 80;
   };
 
   if (invalid(humidity, temperature)) {
