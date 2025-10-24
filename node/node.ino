@@ -29,7 +29,7 @@ RF24 radio(9, 10);
 RF24Network network(radio);
 RF24Mesh mesh(radio, network);
 
-#define nodeID 1
+#define nodeID 4
 
 // RTC DS3231
 RTC_DS3231 rtc;
@@ -37,7 +37,7 @@ const int alarmPin = 3;
 const int outputPin = 4;
 volatile bool alarmFlag = false;
 
-int intervalMinutes = 1;
+int intervalMinutes = 10;
 bool confirmationReceived = false;
 
 struct __attribute__((packed)) SensorData {
@@ -139,6 +139,7 @@ void setup() {
     Serial.println(F("No master -> sleep until next window"));
     configureAlarm(intervalMinutes);
     radio.powerDown();
+    delay(100); //ADDED
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
   }
 
