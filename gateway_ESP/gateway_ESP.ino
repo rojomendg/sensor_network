@@ -27,7 +27,7 @@ RTC_DS3231 rtc;
 
 // ---------- Web ----------
 WebServer server(80);
-const char* LOG_PATH = "/sensor_data.csv";
+const char* LOG_PATH = "/sensor_data_p4.csv";
 
 // ---------- Datos ----------
 struct __attribute__((packed)) SensorData {
@@ -59,7 +59,7 @@ static inline void LOG(const String& s) {
 }
 
 // ---------- Boot log ----------
-const char* BOOTLOG_PATH = "/boot_log.csv";
+const char* BOOTLOG_PATH = "/boot_log_p4.csv";
 
 static inline const char* resetReasonStr(esp_reset_reason_t r) {
   switch (r) {
@@ -121,7 +121,7 @@ bool appendBootLogEntry() {
 }
 
 // ---------- Node log ----------
-const char* NODELOG_PATH = "/node_log.csv";
+const char* NODELOG_PATH = "/node_log_p4.csv";
 
 // Mapa de nodos vistos (IDs 0..255) persistente entre deep-sleep
 RTC_DATA_ATTR uint8_t g_seen_bitmap[32] = {0}; // 32*8 = 256 bits
@@ -312,7 +312,7 @@ void runReceiveWindow(uint32_t window_s) {
               nodeMarkSeen((uint8_t)reqID);
               appendNodeEvent("JOIN", (uint8_t)reqID, addr);
             }
-            
+
             DateTime now = rtc.now();
             TimeData td{(uint16_t)now.year(), (uint8_t)now.month(), (uint8_t)now.day(),
                         (uint8_t)now.hour(), (uint8_t)now.minute(), (uint8_t)now.second()};
@@ -426,7 +426,7 @@ void handleDownload() {
   File f = SPIFFS.open(LOG_PATH, "r");
   if (!f) { server.send(500, "text/plain", "Error abriendo archivo"); return; }
   server.sendHeader("Content-Type", "text/csv");
-  server.sendHeader("Content-Disposition", "attachment; filename=\"sensor_data.csv\"");
+  server.sendHeader("Content-Disposition", "attachment; filename=\"sensor_data_p4.csv\"");
   server.streamFile(f, "text/csv");
   f.close();
 }
@@ -452,7 +452,7 @@ void handleBootDownload() {
   File f = SPIFFS.open(BOOTLOG_PATH, "r");
   if (!f) { server.send(500, "text/plain", "Error abriendo archivo"); return; }
   server.sendHeader("Content-Type", "text/csv");
-  server.sendHeader("Content-Disposition", "attachment; filename=\"boot_log.csv\"");
+  server.sendHeader("Content-Disposition", "attachment; filename=\"boot_log_p4.csv\"");
   server.streamFile(f, "text/csv");
   f.close();
 }
@@ -478,7 +478,7 @@ void handleNodeLogDownload() {
   File f = SPIFFS.open(NODELOG_PATH, "r");
   if (!f) { server.send(500, "text/plain", "Error abriendo archivo"); return; }
   server.sendHeader("Content-Type", "text/csv");
-  server.sendHeader("Content-Disposition", "attachment; filename=\"node_log.csv\"");
+  server.sendHeader("Content-Disposition", "attachment; filename=\"node_log_p4.csv\"");
   server.streamFile(f, "text/csv");
   f.close();
 }

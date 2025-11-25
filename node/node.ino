@@ -29,7 +29,7 @@ RF24 radio(9, 10);
 RF24Network network(radio);
 RF24Mesh mesh(radio, network);
 
-#define nodeID 4
+#define nodeID 2
 
 // RTC DS3231
 RTC_DS3231 rtc;
